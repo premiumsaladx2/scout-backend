@@ -2,10 +2,10 @@ import json
 import os
 from typing import Any, Dict, List
 
+import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from groq import Groq
 from pydantic import BaseModel
 from tavily import TavilyClient
 
@@ -19,7 +19,6 @@ if not GROQ_API_KEY:
 if not TAVILY_API_KEY:
     raise RuntimeError("Missing TAVILY_API_KEY in environment.")
 
-groq_client = Groq(api_key=GROQ_API_KEY)
 tavily_client = TavilyClient(api_key=TAVILY_API_KEY)
 
 app = FastAPI(title="Scout Backend")
@@ -91,20 +90,31 @@ def _llm_reason(query: str, snippets: List[str]) -> Dict[str, Any]:
         "Respond with valid JSON only."
     )
 
+    payload = {
+        "model": "llama-3.1-8b-instant",
+        "temperature": 0.2,
+        "messages": [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": user_prompt},
+        ],
+        "response_format": {"type": "json_object"},
+    }
+
     try:
-        completion = groq_client.chat.completions.create(
-            model="llama-3.1-8b-instant",
-            temperature=0.2,
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": user_prompt},
-            ],
-            response_format={"type": "json_object"},
-        )
+        with httpx.Client(timeout=30) as client:
+            response = client.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {GROQ_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+            )
+            response.raise_for_status()
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Groq completion failed: {exc}") from exc
 
-    raw = completion.choices[0].message.content
+    raw = response.json()["choices"][0]["message"]["content"]
     try:
         return json.loads(raw)
     except Exception as exc:
